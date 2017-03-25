@@ -205,6 +205,7 @@ var Jungle;
                     patch[k] = Jungle.Util.deepCopy(v);
                 }
             }
+            patch['x'] = this.declaration;
             return patch;
         };
         GContext.prototype.parseMode = function (modestr) {
@@ -523,25 +524,48 @@ var Jungle;
             this.preparator = formObj.p || function (x) { };
             this.preparator = formObj.p || function (x) { };
             var contextprops = [];
-            var linkPropRegex = /^[a-zA-Z](?:\w*[a-zA-Z])?$/;
+            var propertyRegex = /^[a-zA-Z](?:\w*[a-zA-Z])?$/;
             for (var k in formObj) {
                 if (Jungle.GForm.RFormProps.indexOf(k) > -1)
                     continue;
-                if (k.match(linkPropRegex)) {
+                if (k.match(propertyRegex)) {
                     contextprops.push({ key: k, type: Jungle.CTXPropertyTypes.NORMAL, value: formObj[k] });
                 }
                 else {
-                    throw new Error("Invalid property for link context, use ports");
+                    throw new Error("Invalid property name for context");
                 }
             }
             return { iospec: null, contextspec: { properties: contextprops, declaration: ctxdeclare } };
         };
-        BaseForm.prototype.consolidate = function (io, ctx) {
-            return Jungle.Util.melder({
+        BaseForm.prototype.parsePorts = function (portNames) {
+            var portDescriptors = [];
+            var linkPortRegex = /^(_?)([a-zA-Z](?:\w*[a-zA-Z])?)(_?)$/;
+            for (var i = 0; i < portNames.length; i++) {
+                var pmatch = portNames[i].match(linkPortRegex);
+                if (pmatch) {
+                    var inp = pmatch[1], label = pmatch[2], out = pmatch[3];
+                    if (inp) {
+                        portDescriptors.push({ label: label, direction: Jungle.IO.Orientation.INPUT });
+                    }
+                    if (out) {
+                        portDescriptors.push({ label: label, direction: Jungle.IO.Orientation.OUTPUT });
+                    }
+                }
+                else {
+                    throw new Error("Invalid property label in Link Cell");
+                }
+            }
+            return portDescriptors;
+        };
+        BaseForm.prototype.extract = function () {
+            return {
                 p: this.preparator,
                 d: this.depreparator,
-                x: ctx.declaration,
-            }, ctx.extract());
+            };
+        };
+        BaseForm.prototype.consolidate = function (io, ctx) {
+            var blended = Jungle.Util.B().init(this.extract()).blend(io.extract()).blend(ctx.extract()).dump();
+            return blended;
         };
         return BaseForm;
     }());
@@ -714,6 +738,7 @@ var Jungle;
         var BaseShell = (function () {
             function BaseShell(base, ports) {
                 this.base = base;
+                this.ports = ports;
                 this.sinks = { '$': new IO.Port('$') };
                 this.sinks.$.addShell(this);
                 this.sources = { '$': new IO.Port('$') };
@@ -776,6 +801,12 @@ var Jungle;
                     outport.dress(coat);
                 }
             };
+            BaseShell.prototype.extractPorts = function () {
+                var extracted = this.ports.map(function (pspec) {
+                    return (pspec.direction == IO.Orientation.INPUT ? '_' : '') + pspec.label + (pspec.direction == IO.Orientation.OUTPUT ? '_' : '');
+                });
+                return extracted;
+            };
             return BaseShell;
         }());
         IO.BaseShell = BaseShell;
@@ -830,19 +861,24 @@ var Jungle;
             return new Jungle.LinkForm(this);
         };
         LinkCell.prototype.prepareChild = function (prepargs, handle, child, k) {
+            var mergekey = k === undefined ? false : k;
             if (child instanceof Jungle.BaseCell) {
                 var replica = child.replicate();
                 replica.setParent(this, k);
-                replica.prepare(prepargs);
-                var aftershell = new Jungle.Util.Junction().merge(replica, false).then(function (replica) {
-                    replica.enshell();
-                    return replica;
+                var prep = replica.prepare(prepargs);
+                var aftershell = new Jungle.Util.Junction().merge(prep, false).then(function (preparedReplica) {
+                    preparedReplica.enshell();
+                    return preparedReplica;
                 }, false);
-                handle.merge(aftershell, k);
+                handle.merge(aftershell, mergekey);
             }
             else {
-                handle.merge(child, k);
+                handle.merge(child, mergekey);
             }
+        };
+        LinkCell.prototype.completePrepare = function () {
+            this.prepared = true;
+            this.enshell();
         };
         LinkCell.prototype.resolve = function (resarg) {
             _super.prototype.resolve.call(this, resarg);
@@ -863,26 +899,12 @@ var Jungle;
             this.preparator = formObj.p || function (x) { };
             var links = formObj.link || [];
             var linkf = formObj.lf || function (a, b) { };
-            this.ports = formObj.port || [];
             var context = {};
             var specialInHook;
             var specialOutHook;
-            var portlabels = [];
+            var portlabels = this.parsePorts(formObj.port || []);
             var labels = {};
             var contextprops = [];
-            var linkPortRegex = /^(_?)([a-zA-Z](?:\w*[a-zA-Z])?)(_?)$/;
-            for (var i = 0; i < this.ports.length; i++) {
-                var pmatch = this.ports[i].match(linkPortRegex);
-                if (pmatch) {
-                    var inp = pmatch[1], label = pmatch[2], out = pmatch[3];
-                    if (inp) {
-                        portlabels.push({ label: label, direction: Jungle.IO.Orientation.INPUT });
-                    }
-                    if (out) {
-                        portlabels.push({ label: label, direction: Jungle.IO.Orientation.OUTPUT });
-                    }
-                }
-            }
             var linkPropRegex = /^[a-zA-Z](?:\w*[a-zA-Z])?$/;
             for (var k in formObj) {
                 if (Jungle.GForm.RFormProps.indexOf(k) > -1)
@@ -895,16 +917,6 @@ var Jungle;
                 }
             }
             return { iospec: { ports: portlabels, links: links, linkFunciton: linkf }, contextspec: { properties: contextprops, declaration: ctxdeclare } };
-        };
-        LinkForm.prototype.consolidate = function (io, ctx) {
-            return Jungle.Util.melder({
-                p: this.preparator,
-                d: this.depreparator,
-                x: ctx.declaration,
-                link: io.links,
-                lf: io.linker,
-                port: this.ports
-            }, ctx.extract());
         };
         return LinkForm;
     }(Jungle.BaseForm));
@@ -925,17 +937,17 @@ var Jungle;
             __extends(LinkIO, _super);
             function LinkIO(host, spec) {
                 var _this = _super.call(this, host, spec) || this;
-                _this.ports = spec.ports;
                 _this.links = spec.links;
+                _this.ports = spec.ports;
                 _this.linkmap = {};
                 _this.linker = spec.linkFunciton;
                 _this.emmissionGate = new Jungle.Util.Junction();
                 _this.closed = { sinks: [], sources: [] };
+                _this.shell = new IO.BaseShell(_this, _this.ports);
+                _this.lining = _this.shell.invert();
                 return _this;
             }
             LinkIO.prototype.enshell = function () {
-                this.shell = new IO.BaseShell(this, this.ports);
-                this.lining = this.shell.invert();
                 this.innerDress();
                 this.applyLinks();
                 var _loop_1 = function (k) {
@@ -954,16 +966,17 @@ var Jungle;
             };
             ;
             LinkIO.prototype.innerDress = function () {
-                for (var k in this.host.crown) {
-                    var v = this.host.crown[k];
-                    var cellSources = v.io.shell.sources;
-                    this.linkmap[k] = {};
+                var _this = this;
+                Jungle.Util.typeCaseSplitF(function (item, key) {
+                    var cellSources = item.io.shell.sources;
+                    var cellLinkMap = [];
                     for (var q in cellSources) {
                         var source = cellSources[q];
-                        this.linkmap[k][q] = [];
-                        source.callback = this.follow.bind(this, k, source);
+                        cellLinkMap[q] = [];
+                        source.callback = _this.follow.bind(_this, key, source);
                     }
-                }
+                    _this.linkmap[key === undefined ? "undefined" : key] = cellLinkMap;
+                })(this.host.crown);
                 this.linkmap['_'] = {};
                 for (var q in this.lining.sources) {
                     var source = this.lining.sources[q];
@@ -1008,7 +1021,6 @@ var Jungle;
                 };
             };
             LinkIO.prototype.interpretLink = function (linkspec) {
-                console.log("Link interpret ", linkspec);
                 var sourceShells = {};
                 var sinkShells = {};
                 var sourceShellLabels = [];
@@ -1080,7 +1092,6 @@ var Jungle;
                 }
             };
             LinkIO.prototype.forgeLink = function (linkspec, sourceCell, sinkCell, sourcePort, sinkPort) {
-                console.log("link formation: source:" + sourceCell + "." + sourcePort.label + ", sink:" + sinkCell + "." + sinkPort.label + ", closed sinks " + this.closed.sinks);
                 this.linkmap[sourceCell][sourcePort.label].push(sinkPort);
                 this.linker.call(this.host.ctx.exposed, sourcePort.hostctx(), sinkPort.hostctx(), sourcePort.label, sinkPort.label);
                 if (linkspec.closeSink) {
@@ -1095,7 +1106,6 @@ var Jungle;
                 this.emmissionGate.then(function (result, handle) {
                     for (var _i = 0, targeted_1 = targeted; _i < targeted_1.length; _i++) {
                         var sink = targeted_1[_i];
-                        console.log("Throughput of " + throughput + " from source " + sourceCell + "." + source.label + " to " + sink.label);
                         sink.handle(throughput);
                     }
                 });
@@ -1104,6 +1114,11 @@ var Jungle;
             };
             ;
             LinkIO.prototype.extract = function () {
+                return {
+                    port: this.shell.extractPorts(),
+                    link: this.links,
+                    lf: this.linker
+                };
             };
             return LinkIO;
         }(IO.BaseIO));
@@ -1329,21 +1344,7 @@ var Jungle;
             this.carrier = formObj.c || Jungle.Util.identity;
             this.resolver = formObj.r || Jungle.Util.identity;
             this.preparator = formObj.p || function (x) { };
-            this.port = formObj.port;
-            var ports = formObj.port || [], portlabels = [];
-            var linkPortRegex = /^(_?)([a-zA-Z](?:\w*[a-zA-Z])?)(_?)$/;
-            for (var i = 0; i < ports.length; i++) {
-                var pmatch = ports[i].match(linkPortRegex);
-                if (pmatch) {
-                    var inp_1 = pmatch[1], label_1 = pmatch[2], out_1 = pmatch[3];
-                    if (inp_1) {
-                        portlabels.push({ label: label_1, direction: Jungle.IO.Orientation.INPUT });
-                    }
-                    if (out_1) {
-                        portlabels.push({ label: label_1, direction: Jungle.IO.Orientation.OUTPUT });
-                    }
-                }
-            }
+            var portlabels = this.parsePorts(formObj.port || []);
             var hookIORegex = /^(_{0,2})([a-zA-Z]+(?:\w*[a-zA-Z])?|\$)(_{0,2})$/;
             var hooks = [];
             var context = { properties: [], declaration: ctxdeclare };
@@ -1509,16 +1510,13 @@ var Jungle;
             }
             return { iospec: { hooks: hooks, specialIn: specialInHook, specialOut: specialOutHook, ports: portlabels }, contextspec: { properties: props, declaration: ctxdeclare } };
         };
-        GForm.prototype.consolidate = function (io, ctx) {
-            var consolidated = Jungle.Util.melder({
+        GForm.prototype.extract = function () {
+            return {
                 r: this.resolver,
                 c: this.carrier,
                 p: this.preparator,
-                d: this.depreparator,
-                x: ctx.declaration,
-                port: this.port
-            }, Jungle.Util.melder(io.extract(), ctx.extract(), void 0, void 0, false));
-            return consolidated;
+                d: this.depreparator
+            };
         };
         return GForm;
     }(Jungle.BaseForm));
@@ -1547,16 +1545,18 @@ var Jungle;
             function ResolveIO(host, iospec) {
                 var _this = _super.call(this, host, iospec) || this;
                 var hooks = iospec.hooks, specialIn = iospec.specialIn, specialOut = iospec.specialOut;
-                _this.ports = iospec.ports;
                 _this.isShellBase = false;
                 _this.specialGate = false;
                 _this.orientation = IO.Orientation.NEUTRAL;
                 _this.inputs = {};
                 _this.outputs = {};
                 _this.initialiseHooks(hooks, specialIn, specialOut);
+                _this.initialisePorts(iospec.ports);
                 return _this;
             }
-            ResolveIO.prototype.prepare = function () {
+            ResolveIO.prototype.initialisePorts = function (ports) {
+                this.portShell = new IO.BaseShell(this, ports);
+                this.host.ctx.exposed.lining = this.portShell.invert();
             };
             ResolveIO.prototype.extract = function () {
                 var ext = {};
@@ -1571,6 +1571,7 @@ var Jungle;
                         ext[label] = hook.tractor;
                     }
                 }
+                ext['port'] = this.portShell.extractPorts();
                 return ext;
             };
             ResolveIO.prototype.initialiseHooks = function (hooks, specialIn, specialOut) {
@@ -1608,10 +1609,6 @@ var Jungle;
                 this.reorient();
                 this.isShellBase = true;
                 this.collect();
-                console.log("ports for resolve lining", this.ports);
-                this.portShell = new IO.BaseShell(this, this.ports);
-                this.host.ctx.addExposedProperty('lining', this.portShell.invert());
-                this.shell.addShell(this.portShell);
                 return this.shell;
             };
             ResolveIO.prototype.reorient = function () {
@@ -1653,7 +1650,7 @@ var Jungle;
             ResolveIO.prototype.collect = function () {
                 var accumulated = {
                     hooks: [].concat(this.hooks),
-                    shells: []
+                    shells: [this.portShell]
                 };
                 var accumulator = function (child, k, accumulated) {
                     child = child;
@@ -2101,7 +2098,7 @@ var Jungle;
                 }
             }
             else if (node1 !== node2) {
-                throw new Error(node1 + " and " + node2 + " not equal, derefs:[" + derefstack + "]");
+                throw new Error("Terminals: \"" + node1 + "\" and \"" + node2 + "\" not equal, derefs:[" + derefstack + "]");
             }
         }
         Util.deeplyEqualsThrow = deeplyEqualsThrow;
@@ -2571,16 +2568,16 @@ var Jungle;
                 }
                 return frontier;
             };
-            Junction.prototype.merge = function (upstream, label) {
+            Junction.prototype.merge = function (upstream, holdstyle) {
                 var frontier = this.frontier();
                 if (upstream instanceof Junction) {
                     return frontier.await(function (done, raise) {
                         upstream.then(done);
                         upstream.catch(raise);
-                    }, label);
+                    }, holdstyle);
                 }
                 else {
-                    frontier.hold(label)[0](upstream);
+                    frontier.hold(holdstyle)[0](upstream);
                     return frontier;
                 }
             };
@@ -2655,7 +2652,6 @@ var Jungle;
         Util.B = B;
         var Blender = (function () {
             function Blender(crown, form) {
-                if (crown === void 0) { crown = {}; }
                 if (form === void 0) { form = {}; }
                 this.crown = crown;
                 if (form instanceof Function) {
@@ -2686,7 +2682,7 @@ var Jungle;
             };
             Blender.prototype.init = function (obj) {
                 if (this.term === false) {
-                    Util.typeCaseSplitF(this.initChurn.bind(this))(obj);
+                    this.crown = Util.typeCaseSplitF(this.initChurn.bind(this))(obj);
                 }
                 else {
                     this.crown = obj;
@@ -2694,32 +2690,36 @@ var Jungle;
                 return this;
             };
             Blender.prototype.initChurn = function (inner, k) {
-                if (k === undefined) {
-                    this.crown = inner;
-                    this.term = true;
+                var result;
+                if (k === undefined && Util.isPrimative(inner)) {
+                    result = inner;
+                    this.term = inner !== undefined;
                 }
                 else if (k in this.crown) {
                     var val = this.crown[k];
                     if (val instanceof Blender) {
-                        val.init(inner);
+                        result = val.init(inner);
                     }
                     else if (val instanceof Function) {
-                        this.crown[k] = B(undefined, val).init(inner);
+                        result = B(undefined, val).init(inner);
                     }
                     else {
-                        this.crown[k] = B(this.crown[k], { mapper: this.mapper, reducer: this.reducer }).init(inner);
+                        result = B(this.crown[k], { mapper: this.mapper, reducer: this.reducer }).init(inner);
                     }
                 }
                 else {
-                    this.crown[k] = B(undefined, { mapper: this.mapper, reducer: this.reducer }).init(inner);
+                    result = B(undefined, { mapper: this.mapper, reducer: this.reducer }).init(inner);
                 }
+                return result;
             };
             Blender.prototype.dump = function () {
                 if (this.term) {
                     return this.crown;
                 }
                 else {
-                    return Util.typeCaseSplitF(function (child) { return child.dump(); })(this.crown);
+                    return Util.typeCaseSplitF(function (child) {
+                        return child !== undefined ? child.dump() : undefined;
+                    })(this.crown);
                 }
             };
             Blender.prototype.blend = function (obj) {
@@ -2732,50 +2732,51 @@ var Jungle;
                 if (this.term) {
                     reduced = this.reducer(this.crown, mapped);
                     this.crown = reduced;
-                    console.log('updated reduced:', reduced);
                 }
                 else {
                     reduced = this.merge(mapped);
-                    console.log('updated recursed:', reduced);
                 }
                 return reduced;
             };
             Blender.prototype.merge = function (income) {
-                var superkeys;
-                superkeys = Object.keys(this.crown || {});
-                superkeys = Object.keys(income || {}).reduce(function (collected, current, i, array) {
-                    return ((array.indexOf(current) === -1)
-                        ?
-                            collected.concat(current) : collected);
-                }, superkeys);
-                console.log('total keys', superkeys, "  income: ", income);
-                var result = this.crown instanceof Array ? [] : {};
-                for (var _i = 0, superkeys_1 = superkeys; _i < superkeys_1.length; _i++) {
-                    var key = superkeys_1[_i];
-                    if (income === undefined || income[key] === undefined) {
-                        result[key] = this.churn(undefined, key);
+                var result, superkeys;
+                if (this.crown === undefined && income !== undefined) {
+                    this.init(income);
+                    return income;
+                }
+                else if (income !== undefined) {
+                    if (this.crown instanceof Array) {
+                        result = [];
+                        superkeys = Util.range(Math.max((income || []).length || 0, this.crown.length));
                     }
                     else {
-                        result[key] = this.churn(income[key], key);
+                        result = {};
+                        superkeys = Object.keys(this.crown || {});
+                        Object.keys(income || {}).forEach(function (key) {
+                            if (superkeys.indexOf(key) === -1) {
+                                superkeys.push(key);
+                            }
+                        });
                     }
+                    for (var _i = 0, superkeys_1 = superkeys; _i < superkeys_1.length; _i++) {
+                        var key = superkeys_1[_i];
+                        if (key in income) {
+                            if (key in this.crown) {
+                                result[key] = this.crown[key]._blend(income[key]);
+                            }
+                            else {
+                                this.crown[key] = B(undefined, { mapper: this.mapper, reducer: this.reducer }).init(income[key]);
+                                result[key] = this.crown[key].dump();
+                            }
+                        }
+                        else if (key in this.crown) {
+                            result[key] = this.crown[key].dump();
+                        }
+                        else {
+                        }
+                    }
+                    return result;
                 }
-                return result;
-            };
-            Blender.prototype.churn = function (inner, k) {
-                console.log("churn, inner:", inner, " , k:", k);
-                var churned;
-                if (inner === undefined) {
-                    churned = this.crown[k].dump();
-                }
-                else if (k in this.crown) {
-                    console.log('recursive blend', inner);
-                    churned = this.crown[k]._blend(inner);
-                }
-                else {
-                    this.crown[k] = B(undefined, { mapper: this.mapper, reducer: this.reducer }).init(inner);
-                    churned = this.crown[k].dump();
-                }
-                return churned;
             };
             return Blender;
         }());

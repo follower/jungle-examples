@@ -28,7 +28,7 @@ const MetroCell = G({},{
 
         window.setTimeout(()=>{
             if(!this.interrupt) this.turn();
-        },this.tempo*1000/60);
+        },60000/this.tempo);
     },
 
     interrupt:false,
@@ -125,10 +125,14 @@ const AudioContextCell = L({
 
 var AudioSetup = AudioContextCell.X({
     metro:MetroCell,
-    osc1:OscillatorCell
+    osc1:OscillatorCell,
+    osc2:OscillatorCell
 },{
     link:[
-        'osc1.aud->dest','_.start->*.start', '_.stop->*.stop', 'metro.click->osc1.toggle'
+        '_.stop=>*.stop',
+        '_.start=>*.start',
+        'metro.click->osc1.toggle',
+        'osc1.aud->dest'
     ]
 })
 

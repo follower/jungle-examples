@@ -140,6 +140,11 @@ declare namespace Jungle {
                 declaration: string;
             };
         };
+        parsePorts(portNames: string[]): IO.PortSpec[];
+        extract(): {
+            p: (arg: any) => void;
+            d: (arg: any) => void;
+        };
         consolidate(io: IO.IOComponent, ctx: GContext): FormSpec;
     }
 }
@@ -168,6 +173,7 @@ declare namespace Jungle {
             base: IOComponent;
             designate: (designator: PortDesignator) => Port[];
             dress: (designator: PortDesignator, coat: OutputCoat) => void;
+            invert: () => Shell;
         }
         interface IOComponent {
             shell: Shell;
@@ -195,6 +201,7 @@ declare namespace Jungle {
             host: BaseCell;
             specialGate: boolean;
             shell: Shell;
+            ports: PortSpec[];
             constructor(host: BaseCell, iospec: any);
             dress(designation: any, coat: OutputCoat): void;
             enshell(): Shell;
@@ -229,11 +236,13 @@ declare namespace Jungle {
         class BaseShell implements Shell {
             sinks: any;
             sources: any;
+            ports: PortSpec[];
             base: IOComponent;
             constructor(base: IOComponent, ports: PortSpec[]);
             invert(): BaseShell;
             designate(designator: PortDesignator): Port[];
             dress(designator: PortDesignator, coat: OutputCoat): void;
+            extractPorts(): string[];
         }
     }
 }
@@ -256,6 +265,7 @@ declare module Jungle {
         constructIO(iospec: any): IO.IOComponent;
         constructForm(): LinkForm;
         protected prepareChild(prepargs: any, handle: any, child: any, k: any): void;
+        completePrepare(): void;
         resolve(resarg: any): void;
     }
 }
@@ -266,12 +276,10 @@ declare namespace Jungle {
         links: string[];
     }
     class LinkForm extends BaseForm {
-        ports: string[];
         parse(formObj: FormSpec): {
             iospec: IOLinkSpec;
             contextspec: ContextSpec;
         };
-        consolidate(io: IO.LinkIO, ctx: GContext): FormSpec;
     }
 }
 declare namespace Jungle {
@@ -286,9 +294,9 @@ declare namespace Jungle {
                 sources: string[];
             };
             linker: (porta, portb) => void;
-            ports: PortSpec[];
             links: string[];
             emmissionGate: Util.Junction;
+            ports: PortSpec[];
             constructor(host: LinkCell, spec: IOLinkSpec);
             enshell(): Shell;
             innerDress(): void;
@@ -300,7 +308,11 @@ declare namespace Jungle {
             private forgeLink(linkspec, sourceCell, sinkCell, sourcePort, sinkPort);
             follow(sourceCell: string, source: Port, throughput: any): void;
             prepare(parg: any): void;
-            extract(): void;
+            extract(): {
+                port: string[];
+                link: string[];
+                lf: (porta: any, portb: any) => void;
+            };
         }
     }
 }
@@ -359,13 +371,17 @@ declare namespace Jungle {
         static RFormProps: string[];
         carrier: (arg) => any;
         resolver: (obj, arg) => any;
-        port: string[];
         constructor(host: ResolutionCell);
         parse(formObj: FormSpec): {
             iospec: any;
             contextspec: ContextSpec;
         };
-        consolidate(io: IO.IOComponent, ctx: GContext): FormSpec;
+        extract(): {
+            r: (obj: any, arg: any) => any;
+            c: (arg: any) => any;
+            p: (arg: any) => void;
+            d: (arg: any) => void;
+        };
     }
 }
 declare namespace Jungle {
@@ -395,7 +411,7 @@ declare namespace Jungle {
             ports: PortSpec[];
             portShell: BaseShell;
             constructor(host: ResolutionCell, iospec: any);
-            prepare(): void;
+            initialisePorts(ports: PortSpec[]): void;
             extract(): {};
             initialiseHooks(hooks: Hook[], specialIn: Hook, specialOut: Hook): void;
             addHook(hook: Hook): void;
@@ -507,7 +523,7 @@ declare namespace Jungle {
             private frontier();
             realize(): any;
             private isClean();
-            private isIdle();
+            isIdle(): boolean;
             private isReady();
             private isTampered();
             private isPresent();
@@ -516,7 +532,7 @@ declare namespace Jungle {
             hold(returnkey?: any): ((result?: any) => any)[];
             _hold(returnkey?: any): ((result?: any) => any)[];
             await(act: (done: (returned: any) => Junction, raise: (message: string) => void) => any, label?: any): Junction;
-            merge(upstream: any, label?: any): Junction;
+            merge(upstream: any, holdstyle?: any): Junction;
             then(callback: (results: any, residue: any, handle: Junction) => void, thenkey?: any): Junction;
             catch(callback: Function): Junction;
         }
@@ -538,7 +554,7 @@ declare namespace Jungle {
     namespace Util {
         function B(crown?: {}, form?: any): Blender;
         class Blender {
-            crown: {};
+            crown: any;
             static strictTypeReduce: boolean;
             static defaultReduce(a: any, b: any): any;
             static defaultMap(x: any): any;
@@ -546,14 +562,13 @@ declare namespace Jungle {
             term: boolean;
             reducer: (a, b) => any;
             mapper: (a) => any;
-            constructor(crown?: {}, form?: any);
+            constructor(crown: any, form?: any);
             init(obj: any): Blender;
-            initChurn(inner: any, k: any): void;
+            initChurn(inner: any, k: any): any;
             dump(): any;
             blend(obj: any): this;
             private _blend(obj);
-            merge(income: any): {};
-            churn(inner: any, k: any): any;
+            merge(income: any): any;
         }
     }
 }

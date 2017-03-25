@@ -30,7 +30,15 @@ function shuffle(arr){
 
 var g = G({
     head:{
-        hair:'snakes',
+        hair:G(
+            ['snakes', 'seaweed'],
+            {
+                r(obj){
+                    return (obj[Math.floor(Math.random()*obj.length)])
+                },
+                i:0
+            }
+        ),
         eyes:{
             colour:'green',
             number:3
